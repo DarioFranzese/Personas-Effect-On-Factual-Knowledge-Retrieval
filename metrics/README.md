@@ -31,9 +31,3 @@ A metrics file can include:
 - Aggregated mean accuracy.
 - Confidence statistics from logprobs.
 - Any optional diagnostic metadata used during analysis.
-
-## Notes
-
-- Keep metric files deterministic and easy to diff.
-- Do not store raw model outputs here.
-- Use English for new documentation or comments about metric generation.

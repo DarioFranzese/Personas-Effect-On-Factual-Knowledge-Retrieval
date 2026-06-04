@@ -29,4 +29,4 @@ A persona file should usually include:
 
 - Keep persona wording stable when possible so benchmark runs remain comparable.
 - Match the benchmark naming convention exactly to avoid file lookup errors.
-- Use English for new documentation and comments in this directory.
+- Generated with 1-shot prompt using Gemini 3.1 Pro (Medium Thinking Effort)

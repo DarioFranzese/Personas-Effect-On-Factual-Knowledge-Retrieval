@@ -33,9 +33,3 @@ A raw result file should usually preserve:
 - Multiple-choice options when present.
 - Raw model output.
 - Any metadata needed to reconstruct the run.
-
-## Notes
-
-- Treat this directory as the source of truth for reruns and audits.
-- Do not overwrite existing files unless you are intentionally replacing a benchmark run.
-- Keep any new documentation in English.
