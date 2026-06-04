@@ -177,56 +177,56 @@ class VLLMBackend(LLMBackend):
             except Exception:
                 return 0
 
-class GPTBackend(LLMBackend):
-    def __init__(self, config: ModelConfig, api_key: Optional[str] = None) -> None:
-        super().__init__(config)
-        from openai import OpenAI
-        key = api_key or os.environ.get("OPENAI_API_KEY")
-        if not key: raise ValueError("OpenAI API key not found.")
-        self._client = OpenAI(api_key=key)
+# class GPTBackend(LLMBackend):
+#     def __init__(self, config: ModelConfig, api_key: Optional[str] = None) -> None:
+#         super().__init__(config)
+#         from openai import OpenAI
+#         key = api_key or os.environ.get("OPENAI_API_KEY")
+#         if not key: raise ValueError("OpenAI API key not found.")
+#         self._client = OpenAI(api_key=key)
 
-    def get_details(self) -> Dict[str, Any]:
-        return {"Provider": "OpenAI", "Reasoning": "Supported" if ModelArchitecture.REASONING in self.config.architecture else "No"}
+#     def get_details(self) -> Dict[str, Any]:
+#         return {"Provider": "OpenAI", "Reasoning": "Supported" if ModelArchitecture.REASONING in self.config.architecture else "No"}
 
-    def generate(self, messages: List[Message]) -> List[LLMResponse]:
-        responses: List[LLMResponse] = []
-        for message in messages:
-            prompt_messages = self._prepend_system_prompt([message])
-            chat = [{"role": m.role, "content": m.content} for m in prompt_messages]
-            prompt_tokens = self._estimate_prompt_tokens(prompt_messages)
-            max_completion_tokens = self._compute_max_new_tokens(prompt_tokens)
-            kwargs = dict(
-                model=self.config.model_id,
-                messages=chat,
-                max_completion_tokens=max_completion_tokens,
-                temperature=self.config.temperature,
-                top_p=self.config.top_p,
-            )
-            if ModelArchitecture.REASONING in self.config.architecture and self.config.reasoning_enabled:
-                kwargs["reasoning_effort"] = self.config.extra_template_kwargs.get("reasoning_effort", "medium")
+#     def generate(self, messages: List[Message]) -> List[LLMResponse]:
+#         responses: List[LLMResponse] = []
+#         for message in messages:
+#             prompt_messages = self._prepend_system_prompt([message])
+#             chat = [{"role": m.role, "content": m.content} for m in prompt_messages]
+#             prompt_tokens = self._estimate_prompt_tokens(prompt_messages)
+#             max_completion_tokens = self._compute_max_new_tokens(prompt_tokens)
+#             kwargs = dict(
+#                 model=self.config.model_id,
+#                 messages=chat,
+#                 max_completion_tokens=max_completion_tokens,
+#                 temperature=self.config.temperature,
+#                 top_p=self.config.top_p,
+#             )
+#             if ModelArchitecture.REASONING in self.config.architecture and self.config.reasoning_enabled:
+#                 kwargs["reasoning_effort"] = self.config.extra_template_kwargs.get("reasoning_effort", "medium")
 
-            response = self._client.chat.completions.create(**kwargs)
-            choice = response.choices[0]
-            content = choice.message.content or ""
-            reasoning_text, output_text = parse_reasoning_output(content)
-            responses.append(
-                LLMResponse(
-                    text=content,
-                    reasoning_text=reasoning_text,
-                    output_text=output_text,
-                    model_id=self.config.model_id,
-                    backend=BackendType.GPT,
-                    finish_reason=choice.finish_reason,
-                )
-            )
+#             response = self._client.chat.completions.create(**kwargs)
+#             choice = response.choices[0]
+#             content = choice.message.content or ""
+#             reasoning_text, output_text = parse_reasoning_output(content)
+#             responses.append(
+#                 LLMResponse(
+#                     text=content,
+#                     reasoning_text=reasoning_text,
+#                     output_text=output_text,
+#                     model_id=self.config.model_id,
+#                     backend=BackendType.GPT,
+#                     finish_reason=choice.finish_reason,
+#                 )
+#             )
 
-        return responses
+#         return responses
 
-    def _estimate_prompt_tokens(self, messages: List[Message]) -> int:
-        text = "\n".join(f"{m.role}: {m.content}" for m in messages)
-        try:
-            import tiktoken
-            encoding = tiktoken.encoding_for_model(self.config.model_id)
-            return len(encoding.encode(text))
-        except Exception:
-            return max(1, len(text) // 4)
+#     def _estimate_prompt_tokens(self, messages: List[Message]) -> int:
+#         text = "\n".join(f"{m.role}: {m.content}" for m in messages)
+#         try:
+#             import tiktoken
+#             encoding = tiktoken.encoding_for_model(self.config.model_id)
+#             return len(encoding.encode(text))
+#         except Exception:
+#             return max(1, len(text) // 4)

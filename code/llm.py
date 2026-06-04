@@ -2,7 +2,7 @@ import logging
 from typing import Dict, List, Optional, Any, Union
 from models import BackendType, Message, ModelConfig, LLMResponse, ModelArchitecture
 from registry import get_model_defaults
-from backends import VLLMBackend, GPTBackend
+from backends import VLLMBackend
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +134,8 @@ class LLM:
         self.config.extra_template_kwargs["reasoning_effort"] = effort
 
     def _init_backend(self, api_keys: Optional[Dict[str, str]]):
-        if self.config.backend == BackendType.GPT:
-            return GPTBackend(self.config, api_key=(api_keys or {}).get("OPENAI_API_KEY"))
+        # if self.config.backend == BackendType.GPT:
+        #     return GPTBackend(self.config, api_key=(api_keys or {}).get("OPENAI_API_KEY"))
         if self.config.backend == BackendType.VLLM:
             try:
                 return VLLMBackend(self.config)
