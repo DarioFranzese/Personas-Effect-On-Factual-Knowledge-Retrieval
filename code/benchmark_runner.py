@@ -26,7 +26,7 @@ class BenchmarkRunner:
         num_shots: int = 3,
     ) -> None:
         self.model = model
-        self.persona_root = Path("/home/dario/denv/experiments/personas")
+        self.persona_root = Path("/home/dario/miniconda3/envs/denv/Personas-Effect-On-Factual-Knowledge-Retrieval/personas")
         self.shot_mode = shot_mode
         self.few_shot_seed = few_shot_seed
         self.num_shots = num_shots
@@ -298,7 +298,7 @@ class BenchmarkRunner:
         self.model.config.system_prompt = self._load_persona(dataset_name, subject)
 
     def _load_persona(self, dataset_name: str, subject: str) -> str:
-        persona_path = self.persona_root / dataset_name / f"{subject}.md"
+        persona_path = self.persona_root / dataset_name / f"{subject.lower()}.md"
         print(persona_path)
         if not persona_path.exists():
             raise FileNotFoundError(f"Persona file not found: {persona_path}")

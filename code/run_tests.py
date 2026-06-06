@@ -74,7 +74,6 @@ if __name__ == '__main__':
 
     environ['CUDA_VISIBLE_DEVICES'] = '6'
 
-
     index = 6
 
     model_id = models_list[index][0]
