@@ -7,7 +7,7 @@ from os import environ
 
 
 
-RESULTS_ROOT = Path('/home/dario/denv/experiments/results')
+RESULTS_ROOT = Path('/home/dario/miniconda3/envs/denv/Personas-Effect-On-Factual-Knowledge-Retrieval/results')
 BENCHMARK_ORDER = ['aime', 'gpqa', 'mmlu_pro', 'mmlu']
 SHOT_MODES = ['zero-shot', 'few-shot']
 PERSONAS_OPTIONS = [False, True]
@@ -63,18 +63,19 @@ if __name__ == '__main__':
 
 
     models_list = [
-        ["kosbu/Llama-3.3-70B-Instruct-AWQ", [False]],
-        ["meta-llama/Llama-3.1-8B-Instruct", [False]],
+        ["deepseek-ai/DeepSeek-R1-Distill-Llama-8B", [True]], #Running on 0
+        ["meta-llama/Llama-3.1-8B-Instruct", [False]], # Running on 1
         ["Valdemardi/DeepSeek-R1-Distill-Llama-70B-AWQ", [True]],
-        ["deepseek-ai/DeepSeek-R1-Distill-Llama-8B", [True]],
+        ["kosbu/Llama-3.3-70B-Instruct-AWQ", [False]],
         ["openai/gpt-oss-20b", ['low', 'medium', 'high']],
         ["Qwen/Qwen3.5-35B-A3B-FP8", [True, False]],
         ["Qwen/Qwen3.5-9B", [True, False]]
     ]
 
-    environ['CUDA_AVAILABLE_DEVICES'] = '0'
+    environ['CUDA_VISIBLE_DEVICES'] = '6'
 
-    index = 0
+
+    index = 6
 
     model_id = models_list[index][0]
     reasoning_variants = models_list[index][1]
@@ -87,7 +88,7 @@ if __name__ == '__main__':
             configs = {'personas': personas, 'shot_mode': shot_mode}
             configurations.append(configs)
 
-    model = LLM(model_id=model_id, reasoning= True in reasoning_variants)
+    model = LLM(model_id=model_id, reasoning= True in reasoning_variants or len(reasoning_variants) == 3)
 
     print(f'Running model: {model_id} with {len(configurations)} dataset configs and {len(reasoning_variants)} reasoning variants.')
 
