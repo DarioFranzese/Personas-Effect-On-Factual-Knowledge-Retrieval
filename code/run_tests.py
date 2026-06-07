@@ -63,8 +63,8 @@ if __name__ == '__main__':
 
 
     models_list = [
-        ["deepseek-ai/DeepSeek-R1-Distill-Llama-8B", [True]], #Running on 0
-        ["meta-llama/Llama-3.1-8B-Instruct", [False]], # Running on 1
+        ["deepseek-ai/DeepSeek-R1-Distill-Llama-8B", [True]],
+        ["meta-llama/Llama-3.1-8B-Instruct", [False]],
         ["Valdemardi/DeepSeek-R1-Distill-Llama-70B-AWQ", [True]],
         ["kosbu/Llama-3.3-70B-Instruct-AWQ", [False]],
         ["openai/gpt-oss-20b", ['low', 'medium', 'high']],
