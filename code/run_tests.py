@@ -8,7 +8,7 @@ from os import environ
 
 
 RESULTS_ROOT = Path('/home/dario/miniconda3/envs/denv/Personas-Effect-On-Factual-Knowledge-Retrieval/results')
-BENCHMARK_ORDER = ['aime', 'gpqa', 'mmlu_pro', 'mmlu']
+BENCHMARK_ORDER = ['aime', 'mmlu_pro', 'mmlu', 'gpqa']
 SHOT_MODES = ['zero-shot', 'few-shot']
 PERSONAS_OPTIONS = [False, True]
 TEST_RUNS = 10
@@ -63,18 +63,18 @@ if __name__ == '__main__':
 
 
     models_list = [
-        ["deepseek-ai/DeepSeek-R1-Distill-Llama-8B", [True]], # Done
-        ["meta-llama/Llama-3.1-8B-Instruct", [False]], # Done
+        ["deepseek-ai/DeepSeek-R1-Distill-Llama-8B", [True]],
+        ["meta-llama/Llama-3.1-8B-Instruct", [False]],
+        ["kosbu/Llama-3.3-70B-Instruct-AWQ", [False]],
         ["Valdemardi/DeepSeek-R1-Distill-Llama-70B-AWQ", [True]],
-        ["kosbu/Llama-3.3-70B-Instruct-AWQ", [False]], # Done
         ["openai/gpt-oss-20b", ['low', 'medium', 'high']],
         ["Qwen/Qwen3.5-35B-A3B-FP8", [True, False]],
         ["Qwen/Qwen3.5-9B", [True, False]]
     ]
 
-    environ['CUDA_VISIBLE_DEVICES'] = '6'
+    environ['CUDA_VISIBLE_DEVICES'] = '4'
 
-    index = 6
+    index = 4
 
     model_id = models_list[index][0]
     reasoning_variants = models_list[index][1]
