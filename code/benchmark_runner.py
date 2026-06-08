@@ -62,19 +62,19 @@ class BenchmarkRunner:
         results: list[dict] = []
         rng = random.Random(self.few_shot_seed)
 
-        subsets = [
-            name for name in get_dataset_config_names("cais/mmlu") if name != "all"
-        ]
-        for subset_index, subset in enumerate(subsets):
-            ds = load_dataset("cais/mmlu", subset, split="test")
-            self._set_persona("mmlu", subset)
-            indices = list(range(len(ds)))
-            batch_messages: list[Message] = []
-            batch_records: list[dict] = []
+        ds = load_dataset("cais/mmlu", "all", split="dev")
+        
+        category_to_indices: dict[str, list[int]] = {}
+        subjects = ds["subject"]
+        for idx, category in enumerate(subjects):
+            category_to_indices.setdefault(category, []).append(idx)
+
+        for category, indices in category_to_indices.items():
+            self._set_persona("mmlu", category)
             batch_messages: list[Message] = []
             batch_records: list[dict] = []
 
-            for row_idx in tqdm(indices, desc=f"mmlu:{subset}"):
+            for row_idx in tqdm(indices, desc=f"mmlu:{category}"):
                 row = ds[row_idx]
                 few_shot_blocks = []
                 if shot_mode == "few-shot":
@@ -87,8 +87,8 @@ class BenchmarkRunner:
                             choices=r["choices"],
                             answer=r.get("answer"),
                             quote_question=True,
-                        )
-                        for r in sample_rows
+                            )
+                            for r in sample_rows
                     ]
 
                 question_block = self._build_question_block(
@@ -100,15 +100,14 @@ class BenchmarkRunner:
                 batch_messages.append(Message(role="user", content=prompt))
                 batch_records.append(
                     {
-                        "subject": row.get("subject", subset),
+                        "subject": category,
                         "question": row["question"],
                         "answer": row.get("answer"),
-                        "index": subset_index,
+                        "index": row_idx,
                     }
                 )
 
             self._append_batch_results(batch_messages, batch_records, results)
-            return results
 
         return results
 
@@ -118,7 +117,7 @@ class BenchmarkRunner:
         results: list[dict] = []
         rng = random.Random(self.few_shot_seed)
 
-        ds = load_dataset("TIGER-Lab/MMLU-Pro", split="test")
+        ds = load_dataset("TIGER-Lab/MMLU-Pro", split="validation")
         category_to_indices: dict[str, list[int]] = {}
         for idx in range(len(ds)):
             category = ds[idx]["category"]
@@ -165,7 +164,6 @@ class BenchmarkRunner:
                 )
 
             self._append_batch_results(batch_messages, batch_records, results)
-            return results
 
         return results
     
@@ -220,7 +218,6 @@ class BenchmarkRunner:
                 )
 
             self._append_batch_results(batch_messages, batch_records, results)
-            return(results)
 
         return results
     
