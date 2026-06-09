@@ -72,9 +72,9 @@ if __name__ == '__main__':
         ["Qwen/Qwen3.5-9B", [True, False]]
     ]
 
-    environ['CUDA_VISIBLE_DEVICES'] = '4'
+    environ['CUDA_VISIBLE_DEVICES'] = '6'
 
-    index = 4
+    index = 6
 
     model_id = models_list[index][0]
     reasoning_variants = models_list[index][1]
