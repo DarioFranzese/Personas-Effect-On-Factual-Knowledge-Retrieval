@@ -53,6 +53,14 @@ class AnswerExtractor:
     """Extract final answers from model outputs with fallback chain."""
 
     ANSWER_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    GENERIC_ANSWER_PATTERNS = (
+        r"\\boxed\s*{\s*([^{}]+?)\s*}",
+        r"\\\(\s*([^()\n]+?)\s*\\\)",
+        r"\$\s*([^$\n]+?)\s*\$",
+        r"^\s*\*{1,2}\s*([^\n*]+?)\s*\*{0,2}\s*$",
+        r"^\s*([^\s\"'`]+?)\s*[\*\.\"]+\s*$",
+        r"^\s*([^\s]+)\s*$",
+    )
 
     def __init__(self):
         """Initialize the answer extractor."""
@@ -86,30 +94,47 @@ class AnswerExtractor:
         str
             Extracted answer or fallback value ("UNFINISHED_OUTPUT", "N.D.").
         """
-        if not output_text:
-            return self._fallback(finish_reason)
 
-        # Step 1.1: Check for "My Answer:" pattern (case-insensitive)
+        if dataset == 'aime':
+            answer = self._extract_aime_answer(output_text)
+            if answer:
+                return answer.strip()
+
+        # Step 1.2: Look for My Answer: {answer}
         answer = self._extract_my_answer_pattern(output_text)
         if answer:
-            return answer.strip()
+            if dataset in ['aime', 'gpqa'] or (len(answer) == 1 and answer.isalnum()): # the extracted answer must refer to the multiple choises
+                return answer.strip()
 
-        # Step 1.2: Dataset-specific extraction
-        if dataset.lower() == "aime":
-            answer = self._extract_aime_answer(output_text)
-        else:
-            # For MMLU, MMLU-Pro, GPQA - use choice matching
+
+        # Step 1.2: Choice matching for multiple-choice datasets
+        if choices:
             answer = self._extract_choice_answer(output_text, choices)
+            if answer and len(answer) == 1 and answer.isalnum():
+                return answer.strip()
 
+        # Step 1.3: Generic regex fallbacks for wrapped / punctuated answers
+        answer = self._extract_generic_answer(output_text)
         if answer:
-            return answer.strip()
+            if dataset in ['aime', 'gpqa'] or (len(answer) == 1 and answer.isalnum()): # the extracted answer must refer to the multiple choises
+                return answer.strip()
+            else:
+                print(f"\n\n\n### *OUTPUT*: {output_text[(len(output_text)//2):]}")
 
         # Step 1.4: Fallback based on finish_reason
         return self._fallback(finish_reason)
-
+    
+    def _extract_aime_answer(self, text: str) -> Optional[str]:
+        """Extract integer answer from AIME output (integers only, no decimals)."""
+        # Look for integers in the output, searching from the end
+        integers = re.findall(r'(?<!\d)(?<!\w)\d+(?!\w)(?!\d)', text)
+        if integers:
+            # Return the last integer found (most likely the answer)
+            return integers[-1]
+        
     def _extract_my_answer_pattern(self, text: str) -> Optional[str]:
         """Extract answer from 'My Answer: {answer}' pattern."""
-        pattern = r"my\s+answer\s*:\s*([^\n]+)"
+        pattern = r"my\s+answer\s*:\s*([A-Z])\)?"
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             return match.group(1).strip()
@@ -142,14 +167,28 @@ class AnswerExtractor:
 
         return None
 
-    def _extract_aime_answer(self, text: str) -> Optional[str]:
-        """Extract integer answer from AIME output (integers only, no decimals)."""
-        # Look for integers in the output, searching from the end
-        integers = re.findall(r'\b(\d+)\b', text)
-        if integers:
-            # Return the last integer found (most likely the answer)
-            return integers[-1]
+    def _extract_generic_answer(self, text: str) -> Optional[str]:
+        """Extract a likely final answer from common wrapper and punctuation patterns."""
+        for candidate_text in [text, *reversed(text.splitlines())]:
+            if not candidate_text or not candidate_text.strip():
+                continue
+
+            for pattern in self.GENERIC_ANSWER_PATTERNS:
+                match = re.search(pattern, candidate_text, re.IGNORECASE | re.MULTILINE)
+                if match:
+                    candidate = match.group(1).strip()
+                    candidate = self._clean_answer_candidate(candidate)
+                    if candidate:
+                        return candidate
+
         return None
+
+    def _clean_answer_candidate(self, candidate: str) -> str:
+        """Remove leftover wrappers from a captured answer candidate."""
+        cleaned = candidate.strip()
+        cleaned = re.sub(r"^[\s\*\$`'\"\(\)\[\]\{\}\\]+", "", cleaned)
+        cleaned = re.sub(r"[\s\*\$`'\"\(\)\[\]\{\}\\]+$", "", cleaned)
+        return cleaned.strip()
 
     def _fallback(self, finish_reason: Optional[str]) -> str:
         """Return fallback value based on finish_reason."""

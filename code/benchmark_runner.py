@@ -203,7 +203,7 @@ class BenchmarkRunner:
 
                 question_block = self._build_question_block(
                     row["Question"],
-                    choices=None,
+                    [row['Correct Answer'], row['Incorrect Answer 1'], row['Incorrect Answer 2'], row['Incorrect Answer 3']],
                     quote_question=False,
                 )
                 prompt = self._build_prompt(question_block, few_shot_blocks, shot_mode=shot_mode)
