@@ -118,12 +118,11 @@ class AnswerExtractor:
         if answer:
             if dataset in ['aime', 'gpqa'] or (len(answer) == 1 and answer.isalnum()): # the extracted answer must refer to the multiple choises
                 return answer.strip()
-            else:
-                print(f"\n\n\n### *OUTPUT*: {output_text[(len(output_text)//2):]}")
 
         # Step 1.4: Fallback based on finish_reason
         return self._fallback(finish_reason)
     
+
     def _extract_aime_answer(self, text: str) -> Optional[str]:
         """Extract integer answer from AIME output (integers only, no decimals)."""
         # Look for integers in the output, searching from the end
@@ -132,12 +131,33 @@ class AnswerExtractor:
             # Return the last integer found (most likely the answer)
             return integers[-1]
         
+
     def _extract_my_answer_pattern(self, text: str) -> Optional[str]:
-        """Extract answer from 'My Answer: {answer}' pattern."""
-        pattern = r"my\s+answer\s*:\s*([A-Z])\)?"
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
+        if not text:
+            return None
+        
+        cleaned_text = re.sub(r'\\', '', text, flags=re.IGNORECASE)
+        cleaned_text = cleaned_text.replace('**', '')
+        
+        patterns = [
+            r"(?:my\s+)?answer\s*:\s*([A-Z])(?:\s*[\).]\s*|\s+(?=\())",
+            r"(?:my\s+)?answer\s*:\s*([A-Z])\s*$",
+            r"(?:my\s+)?answer\s*:\s*.*?\b(?:option|choice)\s+([A-Z])\b",
+            r"(?:therefore|thus|hence),?\s+(?:the\s+)?(?:correct\s+)?(?:choice|answer)\s+(?:is|will\s+be)\s*:\s*([A-Z])\b",
+            r"(?:therefore|thus|hence),?\s+(?:the\s+)?(?:correct\s+)?(?:choice|answer)\s+(?:is|will\s+be)\s*:\s*\n+\s*([A-Z])\b",
+            r"(?:my\s+)?answer\s*:\s*(.+)"
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, cleaned_text, re.IGNORECASE | re.DOTALL)
+            if match:
+                ans = match.group(1).strip()
+                if ans:
+                    if len(ans) == 1 and ans.isalpha():
+                        return ans.upper()
+                    ans = re.sub(r'[\.\s]+$', '', ans)
+                    return ans
+                    
         return None
 
     def _extract_choice_answer(self, text: str, choices: Optional[List[str]]) -> Optional[str]:
@@ -169,14 +189,43 @@ class AnswerExtractor:
 
     def _extract_generic_answer(self, text: str) -> Optional[str]:
         """Extract a likely final answer from common wrapper and punctuation patterns."""
-        for candidate_text in [text, *reversed(text.splitlines())]:
+
+        # Pre-process text to remove source artifacts and repair split lines
+        cleaned_text = re.sub(r'\\', '', text)
+        cleaned_text = re.sub(r'\bmy\s*\n\s*answer\b', 'my answer', cleaned_text, flags=re.IGNORECASE)
+        cleaned_text = re.sub(r'\b(my\s+)?answer\s*\n\s*', r'\1answer', cleaned_text, flags=re.IGNORECASE)
+        cleaned_text = re.sub(r'(\banswer\s*[:\-]\s*)\n\s*', r'\1', cleaned_text, flags=re.IGNORECASE)
+        cleaned_text = re.sub(r'(\banswer\s*\*\*\s*[:\-]\s*)\n\s*', r'\1', cleaned_text, flags=re.IGNORECASE)
+        cleaned_text = re.sub(r'(\banswer\s*[:\-]\s*\*\*\s*)\n\s*', r'\1', cleaned_text, flags=re.IGNORECASE)
+        cleaned_text = re.sub(r'(\banswer\s*\*\*\s*[:\-]\s*\*\*\s*)\n\s*', r'\1', cleaned_text, flags=re.IGNORECASE)
+
+        patterns = [
+            r"\*\*(?:my\s+)?answer\s*[:\-]?\s*\*\*\s*([^\n]+)",
+            r"\*\*(?:my\s+)?answer\s*[:\-]?\s*([^\n*]+)\*\*",
+            r"(?:my\s+)?answer\s*[:\-]?\s*\*\*([^\n*]+)\*\*",
+            r"(?:my\s+)?answer\s*[:\-]\s*([^\n]+)",
+            r"\b(?:my\s+)?answer\b\s*([^\n]+)",
+            r"\ber\s*:\s*([^\n]+)",
+            r"^\s*:\s*([^\n]+)",
+            r"\\boxed\{([^\}]+)\}",
+            r"\bcorrect\s+answer\s*[:\-]?\s*([^\n]+)",
+            r"\bcorrect\s+choice\s*[:\-]?\s*([^\n]+)"
+        ]
+
+        # Prioritize checking line-by-line from the bottom to get the final answer,
+        # then fall back to scanning the entire text block.
+        candidates = [*reversed(cleaned_text.splitlines()), cleaned_text]
+        
+        for candidate_text in candidates:
             if not candidate_text or not candidate_text.strip():
                 continue
 
-            for pattern in self.GENERIC_ANSWER_PATTERNS:
+            for pattern in patterns:
                 match = re.search(pattern, candidate_text, re.IGNORECASE | re.MULTILINE)
                 if match:
                     candidate = match.group(1).strip()
+                    # Strip any lingering markdown formatting characters or trailing punctuation
+                    candidate = candidate.strip("*").strip("_").strip().strip(".")
                     candidate = self._clean_answer_candidate(candidate)
                     if candidate:
                         return candidate
