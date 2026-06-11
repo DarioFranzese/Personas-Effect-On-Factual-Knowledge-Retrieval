@@ -64,17 +64,17 @@ if __name__ == '__main__':
 
     models_list = [
         ["deepseek-ai/DeepSeek-R1-Distill-Llama-8B", [True]], #running on 3
-        ["meta-llama/Llama-3.1-8B-Instruct", [False]], #running on 6
-        ["kosbu/Llama-3.3-70B-Instruct-AWQ", [False]], 
-        ["Valdemardi/DeepSeek-R1-Distill-Llama-70B-AWQ", [True]], 
-        ["openai/gpt-oss-20b", ['low', 'medium', 'high']], 
-        ["Qwen/Qwen3.5-35B-A3B-FP8", [True, False]],
-        ["Qwen/Qwen3.5-9B", [True, False]]
+        ["meta-llama/Llama-3.1-8B-Instruct", [False]], # DONE
+        ["kosbu/Llama-3.3-70B-Instruct-AWQ", [False]], # running on 0
+        ["Valdemardi/DeepSeek-R1-Distill-Llama-70B-AWQ", [True]], # running on 1
+        ["openai/gpt-oss-20b", ['low', 'medium', 'high']], # running on 2
+        ["Qwen/Qwen3.5-35B-A3B-FP8", [True, False]], # running on 4
+        ["Qwen/Qwen3.5-9B", [True, False]] # running on 5
     ]
 
-    environ['CUDA_VISIBLE_DEVICES'] = '6'
+    environ['CUDA_VISIBLE_DEVICES'] = '5'
 
-    index = 1
+    index = 6
 
     model_id = models_list[index][0]
     reasoning_variants = models_list[index][1]
