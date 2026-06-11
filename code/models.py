@@ -54,6 +54,7 @@ class LLMResponse(BaseModel):
     text: str
     reasoning_text: Optional[str] = None
     output_text: Optional[str] = None
+    logprobs: Optional[List] = None
     model_id: str
     backend: BackendType
     prompt: str

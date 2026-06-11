@@ -11,7 +11,7 @@ RESULTS_ROOT = Path('/home/dario/miniconda3/envs/denv/Personas-Effect-On-Factual
 BENCHMARK_ORDER = ['aime', 'mmlu_pro', 'mmlu', 'gpqa']
 SHOT_MODES = ['zero-shot', 'few-shot']
 PERSONAS_OPTIONS = [False, True]
-TEST_RUNS = 10
+TEST_RUNS = 5
 
 RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -63,18 +63,18 @@ if __name__ == '__main__':
 
 
     models_list = [
-        ["deepseek-ai/DeepSeek-R1-Distill-Llama-8B", [True]],
-        ["meta-llama/Llama-3.1-8B-Instruct", [False]],
-        ["kosbu/Llama-3.3-70B-Instruct-AWQ", [False]],
-        ["Valdemardi/DeepSeek-R1-Distill-Llama-70B-AWQ", [True]],
-        ["openai/gpt-oss-20b", ['low', 'medium', 'high']],
+        ["deepseek-ai/DeepSeek-R1-Distill-Llama-8B", [True]], #running on 3
+        ["meta-llama/Llama-3.1-8B-Instruct", [False]], #running on 6
+        ["kosbu/Llama-3.3-70B-Instruct-AWQ", [False]], 
+        ["Valdemardi/DeepSeek-R1-Distill-Llama-70B-AWQ", [True]], 
+        ["openai/gpt-oss-20b", ['low', 'medium', 'high']], 
         ["Qwen/Qwen3.5-35B-A3B-FP8", [True, False]],
         ["Qwen/Qwen3.5-9B", [True, False]]
     ]
 
     environ['CUDA_VISIBLE_DEVICES'] = '6'
 
-    index = 6
+    index = 1
 
     model_id = models_list[index][0]
     reasoning_variants = models_list[index][1]

@@ -22,6 +22,13 @@ except ImportError:
         'to', 'was', 'will', 'with', 'i', 'me', 'my', 'we', 'you', 'your'
     }
 
+import string
+import nltk
+from nltk.corpus import stopwords
+nltk.download('stopwords')
+
+
+
 
 @dataclass
 class QuestionMetrics:
@@ -69,7 +76,6 @@ class AnswerExtractor:
     def extract(
         self,
         output_text: str,
-        golden_answer: Any,
         choices: Optional[List[str]] = None,
         dataset: str = "mmlu",
         finish_reason: Optional[str] = None,
@@ -103,7 +109,7 @@ class AnswerExtractor:
         # Step 1.2: Look for My Answer: {answer}
         answer = self._extract_my_answer_pattern(output_text)
         if answer:
-            if dataset in ['aime', 'gpqa'] or (len(answer) == 1 and answer.isalnum()): # the extracted answer must refer to the multiple choises
+            if dataset == 'gpqa' or ((len(answer) == 1 or dataset == 'aime') and answer.isalnum()):
                 return answer.strip()
 
 
@@ -116,12 +122,55 @@ class AnswerExtractor:
         # Step 1.3: Generic regex fallbacks for wrapped / punctuated answers
         answer = self._extract_generic_answer(output_text)
         if answer:
-            if dataset in ['aime', 'gpqa'] or (len(answer) == 1 and answer.isalnum()): # the extracted answer must refer to the multiple choises
+            if dataset == 'gpqa' or ((len(answer) == 1 or dataset == 'aime') and answer.isalnum()):
                 return answer.strip()
 
         # Step 1.4: Fallback based on finish_reason
         return self._fallback(finish_reason)
     
+    def get_logprobs(self, answer: str, logprobs: List) -> Tuple:
+        """Extract the logprobs of the extracted answer token and return the list of logprobs of generated text without stopwords and punctuation"""
+
+        stop_words = set(stopwords.words('english'))
+        punctuation_set = set(string.punctuation)
+        cleaned_logprobs = [c for c in logprobs if c[0] not in punctuation_set and c[0].lower().strip() not in stop_words]
+        
+        if answer.startswith('N.D.'):
+            answer_logprob = logprobs[-1][1] #fallback
+        else:
+            answer_logprob = next((c[1] for c in reversed(logprobs) if c[0].strip() == answer.strip()), None)
+
+        if answer_logprob is None and len(answer) > 1:
+            for end_idx in range(len(logprobs) - 1, -1, -1):
+                accumulated_text = ""
+                accumulated_logprobs = []
+                
+                # From this ending position, look forward to build the string
+                for start_idx in range(end_idx, len(logprobs)):
+                    token, lp = logprobs[start_idx]
+                    
+                    accumulated_text += token.strip()
+                    accumulated_logprobs.append(lp)
+                    
+                    if accumulated_text == answer:
+                        answer_logprob = sum(accumulated_logprobs) / len(accumulated_logprobs)
+                        break
+                    
+                    # Stop looking forward if we overshot the length of the target answer
+                    if len(accumulated_text) > len(answer):
+                        break
+                
+                # If the inner loop found the match, break the outer loop too
+                if answer_logprob is not None:
+                    break
+
+        if answer_logprob is None:
+            print(f"Couldn't extract the logprob for answer {answer} and logprobs: {logprobs}")
+            raise Exception
+        else:
+            return answer_logprob, cleaned_logprobs
+        
+        
 
     def _extract_aime_answer(self, text: str) -> Optional[str]:
         """Extract integer answer from AIME output (integers only, no decimals)."""
@@ -209,7 +258,9 @@ class AnswerExtractor:
             r"^\s*:\s*([^\n]+)",
             r"\\boxed\{([^\}]+)\}",
             r"\bcorrect\s+answer\s*[:\-]?\s*([^\n]+)",
-            r"\bcorrect\s+choice\s*[:\-]?\s*([^\n]+)"
+            r"\bcorrect\s+choice\s*[:\-]?\s*([^\n]+)",
+            r"\bcorrect\s+answer\s+is\s+([^\n]+)",
+            r"\bchoose\s+([^\n]+)",
         ]
 
         # Prioritize checking line-by-line from the bottom to get the final answer,
@@ -242,10 +293,10 @@ class AnswerExtractor:
     def _fallback(self, finish_reason: Optional[str]) -> str:
         """Return fallback value based on finish_reason."""
         if finish_reason and finish_reason != "stop":
-            return "UNFINISHED_OUTPUT"
+            return "N.D. LENGHT"
         return "N.D."
 
-
+ 
 class AccuracyComputer:
     """Compute accuracy metrics per run and aggregated across runs."""
 

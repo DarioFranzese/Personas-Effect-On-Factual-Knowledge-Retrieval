@@ -126,6 +126,7 @@ class VLLMBackend(LLMBackend):
             max_tokens = self._compute_max_new_tokens(prompt_tokens)
             sampling_params_list.append(
                 self._SamplingParams(
+                    logprobs = 0,
                     temperature=self.config.temperature,
                     top_p=self.config.top_p,
                     max_tokens=max_tokens,
@@ -145,6 +146,7 @@ class VLLMBackend(LLMBackend):
                     text=result.text,
                     reasoning_text=reasoning_text,
                     output_text=output_text,
+                    logprobs = [(logprob_obj.decoded_token, logprob_obj.logprob) for d in result.logprobs for logprob_obj in d.values()],
                     model_id=self.config.model_id,
                     prompt = prompts[i],
                     backend=BackendType.VLLM,
