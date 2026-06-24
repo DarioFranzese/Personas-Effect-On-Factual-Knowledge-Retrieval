@@ -5,6 +5,8 @@ This module provides tools to compute accuracy metrics and confidence scores
 label formats, dataset-specific answer extraction, and 10-run aggregation.
 """
 
+from datasets import load_dataset
+
 import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
@@ -25,9 +27,14 @@ except ImportError:
 import string
 import nltk
 from nltk.corpus import stopwords
+
 nltk.download('stopwords')
 
-
+ds_collection = {
+    "mmlu": load_dataset("cais/mmlu", "all", split="dev"),
+    "mmlu_pro":  load_dataset("TIGER-Lab/MMLU-Pro", split="validation"),
+    "gpqa": load_dataset("Idavidrein/gpqa", "gpqa_main", split="train"),
+}
 
 
 @dataclass
@@ -59,7 +66,7 @@ class AggregatedMetrics:
 class AnswerExtractor:
     """Extract final answers from model outputs with fallback chain."""
 
-    ANSWER_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    ANSWER_LABELS = "ABCDEFGHIJ"
     GENERIC_ANSWER_PATTERNS = (
         r"\\boxed\s*{\s*([^{}]+?)\s*}",
         r"\\\(\s*([^()\n]+?)\s*\\\)",
@@ -76,10 +83,11 @@ class AnswerExtractor:
     def extract(
         self,
         output_text: str,
-        choices: Optional[List[str]] = None,
+        golden: str,
+        question: str,
         dataset: str = "mmlu",
         finish_reason: Optional[str] = None,
-    ) -> str:
+    ) -> tuple[str, str]:
         """Extract answer from model output with fallback chain.
 
         Parameters
@@ -103,31 +111,21 @@ class AnswerExtractor:
 
         if dataset == 'aime':
             answer = self._extract_aime_answer(output_text)
-            if answer:
-                return answer.strip()
-
-        # Step 1.2: Look for My Answer: {answer}
-        answer = self._extract_my_answer_pattern(output_text)
-        if answer:
-            if dataset == 'gpqa' or ((len(answer) == 1 or dataset == 'aime') and answer.isalnum()):
-                return answer.strip()
-
-
-        # Step 1.2: Choice matching for multiple-choice datasets
-        if choices:
-            answer = self._extract_choice_answer(output_text, choices)
-            if answer and len(answer) == 1 and answer.isalnum():
-                return answer.strip()
-
-        # Step 1.3: Generic regex fallbacks for wrapped / punctuated answers
-        answer = self._extract_generic_answer(output_text)
-        if answer:
-            if dataset == 'gpqa' or ((len(answer) == 1 or dataset == 'aime') and answer.isalnum()):
-                return answer.strip()
-
-        # Step 1.4: Fallback based on finish_reason
-        return self._fallback(finish_reason)
+        else:
+            answer = self._extract_generic_answer(output_text)
     
+        if answer:
+            if (dataset == 'aime' or len(answer) == 1) and answer.isalnum(): # check if label was found (except for aime)
+                return ("generic", answer.strip())
+
+        answer = self._extract_golden_answer(dataset, question, golden, output_text) # we only check golden answer because if it's notthe given one then is a mistake
+
+        if answer:
+            return ("golden", answer)
+        else:
+            return ("fallback", self._fallback(finish_reason))
+    
+
     def get_logprobs(self, answer: str, logprobs: List) -> Tuple:
         """Extract the logprobs of the extracted answer token and return the list of logprobs of generated text without stopwords and punctuation"""
 
@@ -135,32 +133,60 @@ class AnswerExtractor:
         punctuation_set = set(string.punctuation)
         cleaned_logprobs = [c for c in logprobs if c[0] not in punctuation_set and c[0].lower().strip() not in stop_words]
         
-        if answer.startswith('N.D.'):
-            answer_logprob = logprobs[-1][1] #fallback
-        else:
-            answer_logprob = next((c[1] for c in reversed(logprobs) if c[0].strip() == answer.strip()), None)
+        target_answer = answer.strip()
 
-        if answer_logprob is None and len(answer) > 1:
-            for end_idx in range(len(logprobs) - 1, -1, -1):
+        if target_answer.startswith('N.D.'):
+            answer_logprob = logprobs[-1][1] # Fallback
+        else:
+            answer_logprob = next((c[1] for c in reversed(logprobs) if c[0].strip() == target_answer), None)
+
+        # Multi-token reconstruction
+        if answer_logprob is None and len(target_answer) > 1:
+            
+            # Helper function to normalize strings for robust comparison
+            def normalize(text: str) -> str:
+                text = text.replace('\\', '')
+                text = re.sub(r'\s+', ' ', text)
+                return text.strip()
+
+            # NEW: Super-normalization that strips ALL whitespace for strict length/match checks
+            def global_strip(text: str) -> str:
+                text = text.replace('\\', '')
+                return re.sub(r'\s+', '', text)
+
+            normalized_target = normalize(target_answer)
+            flat_target = global_strip(target_answer)
+
+            # Step backwards through the logprobs to find the STARTing token of the match
+            for start_idx in range(len(logprobs) - 1, -1, -1):
                 accumulated_text = ""
+                accumulated_text_stripped = ""
                 accumulated_logprobs = []
                 
-                # From this ending position, look forward to build the string
-                for start_idx in range(end_idx, len(logprobs)):
-                    token, lp = logprobs[start_idx]
+                # Scan FORWARD from this start position to piece the tokens together
+                for current_idx in range(start_idx, len(logprobs)):
+                    token, lp = logprobs[current_idx]
                     
-                    accumulated_text += token.strip()
+                    accumulated_text_stripped += token.strip()
+                    accumulated_text += token
                     accumulated_logprobs.append(lp)
                     
-                    if accumulated_text == answer:
+                    # Standard normalized versions
+                    norm_accumulated = normalize(accumulated_text)
+                    norm_accumulated_stripped = normalize(accumulated_text_stripped)
+                    
+                    # NEW: Compare using standard normalization OR global whitespace removal
+                    if (normalized_target in [norm_accumulated, norm_accumulated_stripped] or 
+                        flat_target in [global_strip(accumulated_text), global_strip(accumulated_text_stripped)]):
+                        
                         answer_logprob = sum(accumulated_logprobs) / len(accumulated_logprobs)
                         break
                     
-                    # Stop looking forward if we overshot the length of the target answer
-                    if len(accumulated_text) > len(answer):
+                    # Check lengths using the space-free version to prevent premature truncation
+                    if len(global_strip(accumulated_text_stripped)) > len(flat_target):
                         break
                 
-                # If the inner loop found the match, break the outer loop too
+                # If a match was found in the forward scan, break the outer loop
                 if answer_logprob is not None:
                     break
 
@@ -170,71 +196,173 @@ class AnswerExtractor:
         else:
             return answer_logprob, cleaned_logprobs
         
+    def _extract_golden_answer(self, dataset: str, question: str, answer: str, text: str) -> Optional[str]:
+        """If no label is found, look for actual content of the answer. 
+        If it's not found, it's either not present or wrongly answered.
+        "answer" here is the golden answer provided by the dataset
+        """
         
+        answer = str(answer)
+
+        # If the answer given is a label, convert it to the full string answer
+        if dataset not in ['aime', 'gpqa']:
+            ds = ds_collection[dataset]
+
+            row_index = ds['question'].index(question) 
+
+            if dataset == 'mmlu_pro': 
+                choice_index = ord(answer.lower()) - ord('a') 
+                answer = ds['options'][row_index][choice_index]
+            else:
+                # Assumes answer is already a 0-indexed integer or integer-string
+                choice_index = int(answer)
+                answer = ds['choices'][row_index][choice_index]
+
+        # --- REGEX SEARCH FOR THE STRINGS ---
+        
+        # Escape the answer string so regex doesn't choke on special characters (like ?, (, ), etc.)
+        escaped_answer = re.escape(answer)
+        
+        # Define patterns looking specifically for your answer string
+        # We use \b for word boundaries so we don't accidentally match substrings
+        patterns = [
+            # 1. Trova "pick" dentro o dopo una parola (es. Cyclepick{answer})
+            rf"pick({escaped_answer})\b",
+            
+            # 2. **Answer**: {answer}
+            rf"\*\*(?:my\s+)?answer\s*[:\-]?\s*\*\*\s*({escaped_answer})\b",
+            
+            # 3. **Answer: {answer}**
+            rf"\*\*(?:my\s+)?answer\s*[:\-]?\s*({escaped_answer})\*\*",
+            
+            # 4. Answer: **{answer}**
+            rf"(?:my\s+)?answer\s*[:\-]?\s*\*({escaped_answer})\*\*",
+            
+            # 5. Answer: {answer}
+            rf"(?:my\s+)?answer\s*[:\-]\s*({escaped_answer})\b",
+            
+            # 6. Answer {answer}
+            rf"\b(?:my\s+)?answer\b\s*({escaped_answer})\b",
+            
+            # 7. er: {answer} (gestione troncamenti)
+            rf"\ber\s*:\s*({escaped_answer})\b",
+            
+            # 8. Riga che inizia con : {answer}
+            rf"^\s*:\s*({escaped_answer})\b",
+            
+            # 9. \boxed{{answer}}
+            rf"\\boxed\{{({escaped_answer})\}}",
+            
+            # 10. correct answer: {answer}
+            rf"\bcorrect\s+answer\s*[:\-]?\s*({escaped_answer})\b",
+            
+            # 11. correct choice: {answer}
+            rf"\bcorrect\s+choice\s*[:\-]?\s*({escaped_answer})\b",
+            
+            # 12. correct answer is {answer}
+            rf"\bcorrect\s+answer\s+is\s+({escaped_answer})\b",
+            
+            # 13. choose {answer}
+            rf"\bchoose\s+({escaped_answer})\b",
+
+            # 14. FALLBACK: check if escaped_answer is present within the last 50+len(escaped_answer) characters 
+            rf"\b({escaped_answer})\b(?=.{{0,50}}(?:\n|$))",
+        ]
+
+        # Clean text to remove basic formatting/line break artifacts
+        cleaned_text = re.sub(r'\\', '', text)
+        
+        # To find the LAST match in the document, we scan line-by-line from bottom to top
+        candidates = [*reversed(cleaned_text.splitlines()), cleaned_text]
+        
+        for candidate_text in candidates:
+            if not candidate_text or not candidate_text.strip():
+                continue
+
+            for pattern in patterns:
+                # Case-insensitive search
+                match = re.search(pattern, candidate_text, re.IGNORECASE)
+                if match:
+                    # Successfully found the exact string in a valid context!
+                    extracted = match.group(1).strip()
+                    return self._clean_answer_candidate(extracted)
+
+        return None
+
 
     def _extract_aime_answer(self, text: str) -> Optional[str]:
-        """Extract integer answer from AIME output (integers only, no decimals)."""
-        # Look for integers in the output, searching from the end
-        integers = re.findall(r'(?<!\d)(?<!\w)\d+(?!\w)(?!\d)', text)
-        if integers:
-            # Return the last integer found (most likely the answer)
-            return integers[-1]
-        
+            """Extract a likely final numerical answer from common wrapper and punctuation patterns."""
 
-    def _extract_my_answer_pattern(self, text: str) -> Optional[str]:
-        if not text:
+            # Pre-process text to remove source artifacts and repair split lines
+            cleaned_text = re.sub(r'\\', '', text)
+            cleaned_text = re.sub(r'\bmy\s*\n\s*answer\b', 'my answer', cleaned_text, flags=re.IGNORECASE)
+            cleaned_text = re.sub(r'\b(my\s+)?answer\s*\n\s*', r'\1answer', cleaned_text, flags=re.IGNORECASE)
+            cleaned_text = re.sub(r'(\banswer\s*[:\-]\s*)\n\s*', r'\1', cleaned_text, flags=re.IGNORECASE)
+            cleaned_text = re.sub(r'(\banswer\s*\*\*\s*[:\-]\s*)\n\s*', r'\1', cleaned_text, flags=re.IGNORECASE)
+            cleaned_text = re.sub(r'(\banswer\s*[:\-]\s*\*\*\s*)\n\s*', r'\1', cleaned_text, flags=re.IGNORECASE)
+            cleaned_text = re.sub(r'(\banswer\s*\*\*\s*[:\-]\s*\*\*\s*)\n\s*', r'\1', cleaned_text, flags=re.IGNORECASE)
+
+            patterns = [
+                # 1. Trova "pick" seguito da un numero intero (es. pick42 o pick 100)
+                r"pick\s*\b([0-9]+)\b",
+                
+                # 2. **Answer**: 42
+                r"\*\*(?:my\s+)?answer\s*[:\-]?\s*\*\*\s*\b([0-9]+)\b",
+                
+                # 3. **Answer: 42**
+                r"\*\*(?:my\s+)?answer\s*[:\-]?\s*\b([0-9]+)\*\*",
+                
+                # 4. Answer: **42**
+                r"(?:my\s+)?answer\s*[:\-]?\s*\*\b([0-9]+)\*\*",
+                
+                # 5. Answer: 42
+                r"(?:my\s+)?answer\s*[:\-]\s*\b([0-9]+)\b",
+                
+                # 6. Answer 42
+                r"\b(?:my\s+)?answer\b\s*\b([0-9]+)\b",
+                
+                # 7. er: 42 (gestione troncamenti)
+                r"\ber\s*:\s*\b([0-9]+)\b",
+                
+                # 8. Riga che inizia con : 42
+                r"^\s*:\s*\b([0-9]+)\b",
+                
+                # 9. \boxed{42}
+                r"boxed\{([0-9]+)\}",
+                
+                # 10. correct answer: 42
+                r"\bcorrect\s+answer\s*[:\-]?\s*\b([0-9]+)\b",
+                
+                # 11. correct choice: 42
+                r"\bcorrect\s+choice\s*[:\-]?\s*\b([0-9]+)\b",
+                
+                # 12. correct answer is 42
+                r"\bcorrect\s+answer\s+is\s+\b([0-9]+)\b",
+                
+                # 13. choose 42
+                r"\bchoose\s+\b([0-9]+)\b",
+            ]
+            
+            # Prioritize checking line-by-line from the bottom to get the final answer,
+            # then fall back to scanning the entire text block.
+            candidates = [*reversed(cleaned_text.splitlines()), cleaned_text]
+            
+            for candidate_text in candidates:
+                if not candidate_text or not candidate_text.strip():
+                    continue
+
+                for pattern in patterns:
+                    match = re.search(pattern, candidate_text, re.IGNORECASE | re.MULTILINE)
+                    if match:
+                        candidate = match.group(1).strip()
+                        # Strip any lingering markdown formatting characters or trailing punctuation
+                        candidate = candidate.strip("*").strip("_").strip().strip(".")
+                        candidate = self._clean_answer_candidate(candidate)
+                        if candidate:
+                            return candidate
+
             return None
         
-        cleaned_text = re.sub(r'\\', '', text, flags=re.IGNORECASE)
-        cleaned_text = cleaned_text.replace('**', '')
-        
-        patterns = [
-            r"(?:my\s+)?answer\s*:\s*([A-Z])(?:\s*[\).]\s*|\s+(?=\())",
-            r"(?:my\s+)?answer\s*:\s*([A-Z])\s*$",
-            r"(?:my\s+)?answer\s*:\s*.*?\b(?:option|choice)\s+([A-Z])\b",
-            r"(?:therefore|thus|hence),?\s+(?:the\s+)?(?:correct\s+)?(?:choice|answer)\s+(?:is|will\s+be)\s*:\s*([A-Z])\b",
-            r"(?:therefore|thus|hence),?\s+(?:the\s+)?(?:correct\s+)?(?:choice|answer)\s+(?:is|will\s+be)\s*:\s*\n+\s*([A-Z])\b",
-            r"(?:my\s+)?answer\s*:\s*(.+)"
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, cleaned_text, re.IGNORECASE | re.DOTALL)
-            if match:
-                ans = match.group(1).strip()
-                if ans:
-                    if len(ans) == 1 and ans.isalpha():
-                        return ans.upper()
-                    ans = re.sub(r'[\.\s]+$', '', ans)
-                    return ans
-                    
-        return None
-
-    def _extract_choice_answer(self, text: str, choices: Optional[List[str]]) -> Optional[str]:
-        """Extract choice label from text by matching against available choices."""
-        if not choices:
-            return None
-
-        text_lower = text.lower()
-        choices_list = [str(c).strip() for c in choices]
-
-        # Try matching choice labels (A, B, C, etc.)
-        for i, choice in enumerate(choices_list):
-            label = self.ANSWER_LABELS[i] if i < len(self.ANSWER_LABELS) else str(i + 1)
-
-            # Search for label in output (backward to prioritize end of text)
-            for search_pos in range(len(text_lower) - 1, max(len(text_lower) - 500, 0), -1):
-                if text_lower[search_pos : search_pos + len(label)].lower() == label.lower():
-                    return label
-                if text_lower[search_pos : search_pos + len(choice)].lower() == choice.lower():
-                    return label
-
-        # Try matching choice content anywhere in output
-        for i, choice in enumerate(choices_list):
-            label = self.ANSWER_LABELS[i] if i < len(self.ANSWER_LABELS) else str(i + 1)
-            if choice.lower() in text_lower:
-                return label
-
-        return None
 
     def _extract_generic_answer(self, text: str) -> Optional[str]:
         """Extract a likely final answer from common wrapper and punctuation patterns."""
@@ -249,20 +377,47 @@ class AnswerExtractor:
         cleaned_text = re.sub(r'(\banswer\s*\*\*\s*[:\-]\s*\*\*\s*)\n\s*', r'\1', cleaned_text, flags=re.IGNORECASE)
 
         patterns = [
-            r"\*\*(?:my\s+)?answer\s*[:\-]?\s*\*\*\s*([^\n]+)",
-            r"\*\*(?:my\s+)?answer\s*[:\-]?\s*([^\n*]+)\*\*",
-            r"(?:my\s+)?answer\s*[:\-]?\s*\*\*([^\n*]+)\*\*",
-            r"(?:my\s+)?answer\s*[:\-]\s*([^\n]+)",
-            r"\b(?:my\s+)?answer\b\s*([^\n]+)",
-            r"\ber\s*:\s*([^\n]+)",
-            r"^\s*:\s*([^\n]+)",
-            r"\\boxed\{([^\}]+)\}",
-            r"\bcorrect\s+answer\s*[:\-]?\s*([^\n]+)",
-            r"\bcorrect\s+choice\s*[:\-]?\s*([^\n]+)",
-            r"\bcorrect\s+answer\s+is\s+([^\n]+)",
-            r"\bchoose\s+([^\n]+)",
+            # 1. Trova "pick" seguito direttamente da UN SOLO carattere alfanumerico (es. CyclepickA)
+            # Usiamo \b alla fine per assicurarci che dopo la lettera/cifra non ci siano altre lettere/cifre
+            r"pick([A-La-l0-9])\b",
+            
+            # 2. **Answer**: A
+            r"\*\*(?:my\s+)?answer\s*[:\-]?\s*\*\*\s*([A-La-l0-9])\b",
+            
+            # 3. **Answer: A** (Qui togliamo il + in modo che dentro gli asterischi ci sia solo il singolo carattere)
+            r"\*\*(?:my\s+)?answer\s*[:\-]?\s*([A-La-l0-9])\*\*",
+            
+            # 4. Answer: **A**
+            r"(?:my\s+)?answer\s*[:\-]?\s*\*([A-La-l0-9])\*\*",
+            
+            # 5. Answer: A
+            r"(?:my\s+)?answer\s*[:\-]\s*([A-La-l0-9])\b",
+            
+            # 6. Answer A
+            r"\b(?:my\s+)?answer\b\s*([A-La-l0-9])\b",
+            
+            # 7. er: A (gestione troncamenti)
+            r"\ber\s*:\s*([A-La-l0-9])\b",
+            
+            # 8. Riga che inizia con : A
+            r"^\s*:\s*([A-La-l0-9])\b",
+            
+            # 9. \boxed{A} (Rimosso il + in modo che dentro le graffe ci sia solo una lettera o una cifra)
+            r"\\boxed\{([A-La-l0-9])\}",
+            
+            # 10. correct answer: A
+            r"\bcorrect\s+answer\s*[:\-]?\s*([A-La-l0-9])\b",
+            
+            # 11. correct choice: A
+            r"\bcorrect\s+choice\s*[:\-]?\s*([A-La-l0-9])\b",
+            
+            # 12. correct answer is A
+            r"\bcorrect\s+answer\s+is\s+([A-La-l0-9])\b",
+            
+            # 13. choose A
+            r"\bchoose\s+([A-La-l0-9])\b",
         ]
-
+        
         # Prioritize checking line-by-line from the bottom to get the final answer,
         # then fall back to scanning the entire text block.
         candidates = [*reversed(cleaned_text.splitlines()), cleaned_text]
@@ -476,6 +631,93 @@ class AccuracyComputer:
         }
 
 
+
+    def compute_run_accuracy_json(self, run_results: List[Dict[str, Any]], dataset: str = "mmlu") -> Dict[str, Any]:
+        """Compute accuracy metrics for a single run using the custom JSON structure and dataset-specific logic."""
+        total_correct = 0
+        total_questions = 0
+        nd_count = 0
+        nd_length_count = 0
+        subject_counts = defaultdict(lambda: {"correct": 0, "total": 0})
+        
+        dataset_lower = dataset.lower().strip()
+        
+        for item in run_results:
+            subject = item.get("subject", "unknown")
+            golden_raw = item.get("golden_label")
+            extracted_raw = item.get("extracted_answer")
+            
+            # Ensure safe string formatting for text analysis
+            extracted_str = str(extracted_raw).strip() if extracted_raw is not None else ""
+            extracted_lower = extracted_str.lower()
+            
+            # 1. Primi controlli per i fallimenti di estrazione (Sempre errati)
+            if extracted_lower == "n.d.":
+                nd_count += 1
+                is_correct = False
+            elif extracted_lower == "n.d. lenght":
+                nd_length_count += 1
+                is_correct = False
+            else:
+                # 2. Logica condizionale in base al dataset fornito
+                if dataset_lower == "aime":
+                    # Confronto tra stringa ed intero
+                    try:
+                        is_correct = int(float(extracted_str)) == int(golden_raw)
+                    except (ValueError, TypeError):
+                        is_correct = extracted_str.strip() == str(golden_raw).strip()
+                        
+                elif dataset_lower == "gpqa":
+                    # Corretto se estratto è "A" oppure se ha lunghezza maggiore di 1
+                    is_correct = (extracted_str == "A") or (len(extracted_str) > 1)
+                    
+                elif dataset_lower == "mmlu":
+                    # Mappatura indici numerici (0->A, 1->B, ...)
+                    try:
+                        golden_index = int(golden_raw)
+                        # Genera lettere dinamiche a seconda dell'indice
+                        expected_letter = chr(65 + golden_index) if 0 <= golden_index < 26 else ""
+                    except (ValueError, TypeError):
+                        expected_letter = str(golden_raw).strip().upper()
+                        
+                    if len(extracted_str) == 1 and extracted_str.isalpha():
+                        is_correct = extracted_str.upper() == expected_letter
+                    else:
+                        # Se non è una singola lettera, allora è corretto per fallback
+                        is_correct = True
+                        
+                elif dataset_lower == "mmlu_pro":
+                    # Entrambe le label sono lettere, se l'estratto non è una singola lettera è corretto
+                    if len(extracted_str) == 1 and extracted_str.isalpha():
+                        is_correct = extracted_str.upper() == str(golden_raw).strip().upper()
+                    else:
+                        is_correct = True
+                else:
+                    # Fallback generico per altri dataset non mappati
+                    is_correct = extracted_lower == str(golden_raw).strip().lower()
+            
+            total_questions += 1
+            subject_counts[subject]["total"] += 1
+            if is_correct:
+                total_correct += 1
+                subject_counts[subject]["correct"] += 1
+                
+        global_accuracy = total_correct / total_questions if total_questions > 0 else 0.0
+        nd_percentage = nd_count / total_questions if total_questions > 0 else 0.0
+        nd_length_percentage = nd_length_count / total_questions if total_questions > 0 else 0.0
+        
+        subject_accuracy = {
+            subj: (counts["correct"] / counts["total"] if counts["total"] > 0 else 0.0)
+            for subj, counts in subject_counts.items()
+        }
+        
+        return {
+            "global_accuracy": global_accuracy,
+            "subject_accuracy": subject_accuracy,
+            "nd_percentage": nd_percentage,
+            "nd_length_percentage": nd_length_percentage
+        }
+
 class ConfidenceComputer:
     """Compute confidence metrics from logprobs."""
 
@@ -674,6 +916,45 @@ class ConfidenceComputer:
         }
 
 
+
+    def compute_run_confidence_json(self, run_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Compute confidence metrics for a single run using the custom JSON structure."""
+        extracted_logprobs = []
+        complete_logprob_means = []
+        subject_data = defaultdict(lambda: {"extracted_logprobs": [], "complete_logprob_means": []})
+        
+        for item in run_results:
+            subject = item.get("subject", "unknown")
+            
+            ext_lp = item.get("extracted_logprob")
+            if ext_lp is not None:
+                extracted_logprobs.append(ext_lp)
+                subject_data[subject]["extracted_logprobs"].append(ext_lp)
+                
+            lps = item.get("logprobs", [])
+            if lps:
+                lp_values = [pair[1] for pair in lps if len(pair) > 1 and isinstance(pair[1], (int, float))]
+                if lp_values:
+                    mean_lp = sum(lp_values) / len(lp_values)
+                    complete_logprob_means.append(mean_lp)
+                    subject_data[subject]["complete_logprob_means"].append(mean_lp)
+                    
+        mean_extracted_logprob = sum(extracted_logprobs) / len(extracted_logprobs) if extracted_logprobs else None
+        
+        subject_confidence = {}
+        for subj, data in subject_data.items():
+            subj_mean_ext_lp = sum(data["extracted_logprobs"]) / len(data["extracted_logprobs"]) if data["extracted_logprobs"] else None
+            subject_confidence[subj] = {
+                "extracted_logprob_mean": subj_mean_ext_lp,
+                "complete_logprob_means": data["complete_logprob_means"]
+            }
+            
+        return {
+            "extracted_logprob_mean": mean_extracted_logprob,
+            "complete_logprob_means": complete_logprob_means,
+            "subject_confidence": subject_confidence
+        }
+
 class BenchmarkEvaluator:
     """Main evaluator orchestrating accuracy and confidence computation."""
 
@@ -747,6 +1028,30 @@ class BenchmarkEvaluator:
             confidence=confidence_metrics,
         )
 
+
+
+    def evaluate_json_results(self, all_runs_results: List[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """Evaluate custom JSON benchmark results across all 5 runs."""
+        output_metrics = []
+        for run_results in all_runs_results:
+            acc_metrics = self.accuracy_computer.compute_run_accuracy_json(run_results, dataset=self.dataset)
+            conf_metrics = self.confidence_computer.compute_run_confidence_json(run_results)
+            
+            run_aggregator = {
+                "accuracy": {
+                    "mean_accuracy": acc_metrics["global_accuracy"],
+                    "accuracy_per_subject": acc_metrics["subject_accuracy"],
+                    "nd_percentage": acc_metrics["nd_percentage"],
+                    "nd_length_percentage": acc_metrics["nd_length_percentage"]
+                },
+                "confidence_score": {
+                    "mean_extracted_logprob": conf_metrics["extracted_logprob_mean"],
+                    "complete_logprob_means": conf_metrics["complete_logprob_means"],
+                    "per_subject": conf_metrics["subject_confidence"]
+                }
+            }
+            output_metrics.append(run_aggregator)
+        return output_metrics
 
 def should_skip_evaluation(
     evaluation_file: Path,
