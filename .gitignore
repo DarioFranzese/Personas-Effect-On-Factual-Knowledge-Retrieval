@@ -1,2 +1,5 @@
 presentation_guidelines.md
 __pycache__
+/answers
+/unpacked
+*.tar.gz
